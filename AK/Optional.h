@@ -131,6 +131,12 @@ public:
         return static_cast<Self const&>(*this).has_value() && static_cast<Self const&>(*this).value() == other;
     }
 
+    template<typename O>
+    ALWAYS_INLINE bool operator!() const
+    {
+        return static_cast<Self const&>(*this).has_value();
+    }
+
     [[nodiscard]] ALWAYS_INLINE T const& operator*() const { return static_cast<Self const&>(*this).value(); }
     [[nodiscard]] ALWAYS_INLINE T& operator*() { return static_cast<Self&>(*this).value(); }
 
@@ -269,6 +275,12 @@ public:
     ALWAYS_INLINE bool operator==(O const& other) const
     {
         return has_value() && value() == other;
+    }
+
+    template<typename O>
+    ALWAYS_INLINE bool operator!() const
+    {
+        return !has_value();
     }
 
     ALWAYS_INLINE ~Optional()
@@ -524,6 +536,12 @@ public:
         return has_value() && value() == other;
     }
 
+    template<typename O>
+    ALWAYS_INLINE bool operator!() const
+    {
+        return !has_value();
+    }
+
     ALWAYS_INLINE AddConstToReferencedType<T> operator*() const { return value(); }
     ALWAYS_INLINE T operator*() { return value(); }
 
@@ -605,6 +623,7 @@ private:
 };
 
 }
+
 
 #if USING_AK_GLOBALLY
 using AK::Optional;

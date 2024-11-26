@@ -36,6 +36,7 @@ static constexpr Array libweb_interface_namespaces = {
     "SVG"sv,
     "Selection"sv,
     "UIEvents"sv,
+    "URLPattern"sv,
     "WebAudio"sv,
     "WebGL"sv,
     "WebIDL"sv,

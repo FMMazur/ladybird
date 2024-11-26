@@ -102,6 +102,7 @@ static bool is_platform_object(Type const& type)
         "TextTrack"sv,
         "TimeRanges"sv,
         "URLSearchParams"sv,
+        "URLPattern"sv,
         "VTTRegion"sv,
         "VideoTrack"sv,
         "VideoTrackList"sv,
@@ -1688,7 +1689,7 @@ enum class WrappingReference {
     Yes,
 };
 
-static void generate_wrap_statement(SourceGenerator& generator, ByteString const& value, IDL::Type const& type, IDL::Interface const& interface, StringView result_expression, WrappingReference wrapping_reference = WrappingReference::No, size_t recursion_depth = 0)
+static void generate_wrap_statement(SourceGenerator& generator, ByteString const& value, IDL::Type const& type, IDL::Interface const& interface, StringView result_expression, WrappingReference wrapping_reference = WrappingReference::No, StringView parent_name = ""sv, size_t recursion_depth = 0)
 {
     auto scoped_generator = generator.fork();
     scoped_generator.set("value", value);
@@ -1707,6 +1708,7 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
     }
     scoped_generator.set("result_expression", result_expression);
     scoped_generator.set("recursion_depth", ByteString::number(recursion_depth));
+    scoped_generator.set("parent_name", parent_name);
 
     if (type.name() == "undefined") {
         scoped_generator.append(R"~~~(
@@ -1750,7 +1752,7 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
 )~~~");
         } else {
             scoped_generator.append(R"~~~(
-    @result_expression@ JS::PrimitiveString::create(vm, @value@);
+        @result_expression@ JS::PrimitiveString::create(vm, @value@);
 )~~~");
         }
     } else if (type.name() == "sequence") {
@@ -1782,7 +1784,7 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
             auto* wrapped_element@recursion_depth@ = &(*element@recursion_depth@);
 )~~~");
         } else {
-            generate_wrap_statement(scoped_generator, ByteString::formatted("element{}", recursion_depth), sequence_generic_type.parameters().first(), interface, ByteString::formatted("auto wrapped_element{} =", recursion_depth), WrappingReference::Yes, recursion_depth + 1);
+            generate_wrap_statement(scoped_generator, ByteString::formatted("element{}", recursion_depth), sequence_generic_type.parameters().first(), interface, ByteString::formatted("auto wrapped_element{} =", recursion_depth), WrappingReference::Yes, parent_name, recursion_depth + 1);
         }
 
         scoped_generator.append(R"~~~(
@@ -1837,7 +1839,7 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
 )~~~");
 
             // NOTE: While we are using const&, the underlying type for wrappable types in unions is (Nonnull)RefPtr, which are not references.
-            generate_wrap_statement(union_generator, ByteString::formatted("visited_union_value{}", recursion_depth), current_union_type, interface, "return"sv, WrappingReference::No, recursion_depth + 1);
+            generate_wrap_statement(union_generator, ByteString::formatted("visited_union_value{}", recursion_depth), current_union_type, interface, "return"sv, WrappingReference::No, ByteString::formatted("{}{}", parent_name, cpp_type.name), recursion_depth + 1);
 
             // End of current visit lambda.
             // The last lambda cannot have a trailing comma on the closing brace, unless the type is nullable, where an extra lambda will be generated for the Empty case.
@@ -1896,28 +1898,29 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
         auto dictionary_generator = scoped_generator.fork();
 
         dictionary_generator.append(R"~~~(
-    auto dictionary_object@recursion_depth@ = JS::Object::create(realm, realm.intrinsics().object_prototype());
+    auto dictionary_object@parent_name@_@recursion_depth@ = JS::Object::create(realm, realm.intrinsics().object_prototype());
 )~~~");
 
         auto* current_dictionary = &interface.dictionaries.find(type.name())->value;
         while (true) {
-            for (auto& member : current_dictionary->members) {
+            for (size_t i = 0; i < current_dictionary->members.size(); ++i) {
+                const auto& member = current_dictionary->members.at(i);
                 dictionary_generator.set("member_key", member.name);
                 auto member_key_js_name = ByteString::formatted("{}{}", make_input_acceptable_cpp(member.name.to_snakecase()), recursion_depth);
                 dictionary_generator.set("member_name", member_key_js_name);
                 auto member_value_js_name = ByteString::formatted("{}_value", member_key_js_name);
                 dictionary_generator.set("member_value", member_value_js_name);
 
-                auto wrapped_value_name = ByteString::formatted("wrapped_{}", member_value_js_name);
+                auto wrapped_value_name = ByteString::formatted("wrapped_{}_{}", parent_name,member_value_js_name);
                 dictionary_generator.set("wrapped_value_name", wrapped_value_name);
 
                 dictionary_generator.append(R"~~~(
     JS::Value @wrapped_value_name@;
 )~~~");
-                generate_wrap_statement(dictionary_generator, ByteString::formatted("{}.{}", value, member.name.to_snakecase()), member.type, interface, ByteString::formatted("{} =", wrapped_value_name), WrappingReference::No, recursion_depth + 1);
+                generate_wrap_statement(dictionary_generator, ByteString::formatted("{}{}{}", value, type.is_nullable() ? "->" : ".", member.name.to_snakecase()), member.type, interface, ByteString::formatted("{} =", wrapped_value_name), WrappingReference::No, ByteString::formatted("{}{}", parent_name, member_key_js_name),  recursion_depth + 1);
 
                 dictionary_generator.append(R"~~~(
-    MUST(dictionary_object@recursion_depth@->create_data_property("@member_key@", @wrapped_value_name@));
+    MUST(dictionary_object@parent_name@_@recursion_depth@->create_data_property("@member_key@", @wrapped_value_name@));
 )~~~");
             }
 
@@ -1928,7 +1931,7 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
         }
 
         dictionary_generator.append(R"~~~(
-    @result_expression@ dictionary_object@recursion_depth@;
+    @result_expression@ dictionary_object@parent_name@_@recursion_depth@;
 )~~~");
     } else if (type.name() == "object") {
         scoped_generator.append(R"~~~(
@@ -4289,6 +4292,7 @@ static void generate_using_namespace_definitions(SourceGenerator& generator)
     using namespace Web::SVG;
     using namespace Web::UIEvents;
     using namespace Web::UserTiming;
+    using namespace Web::URLPattern;
     using namespace Web::WebAssembly;
     using namespace Web::WebAudio;
     using namespace Web::WebGL;

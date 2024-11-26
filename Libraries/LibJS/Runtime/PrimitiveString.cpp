@@ -208,6 +208,14 @@ GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, StringView string)
     return create(vm, String::from_utf8(string).release_value());
 }
 
+GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, Optional<String> string)
+{
+    if (!string.has_value())
+        return vm.empty_string();
+    
+    return create(vm, string.release_value());
+}
+
 GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, ByteString string)
 {
     if (string.is_empty())
