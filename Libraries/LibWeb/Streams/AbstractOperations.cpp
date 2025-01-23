@@ -290,7 +290,7 @@ bool readable_stream_has_default_reader(ReadableStream const& stream)
 }
 
 // https://streams.spec.whatwg.org/#readable-stream-pipe-to
-GC::Ref<WebIDL::Promise> readable_stream_pipe_to(ReadableStream& source, WritableStream& dest, bool, bool, bool, JS::Value signal)
+GC::Ref<WebIDL::Promise> readable_stream_pipe_to(ReadableStream& source, WritableStream& dest, bool, bool prevent_abort, bool prevent_cancel, JS::Value signal)
 {
     auto& realm = source.realm();
 
@@ -329,19 +329,77 @@ GC::Ref<WebIDL::Promise> readable_stream_pipe_to(ReadableStream& source, Writabl
     // 13. Let promise be a new promise.
     auto promise = WebIDL::create_promise(realm);
 
-    // FIXME 14. If signal is not undefined,
-    //           1. Let abortAlgorithm be the following steps:
-    //              1. Let error be signal’s abort reason.
-    //              2. Let actions be an empty ordered set.
-    //              3. If preventAbort is false, append the following action to actions:
-    //                 1. If dest.[[state]] is "writable", return ! WritableStreamAbort(dest, error).
-    //                 2. Otherwise, return a promise resolved with undefined.
-    //              4. If preventCancel is false, append the following action to actions:
-    //                 1. If source.[[state]] is "readable", return ! ReadableStreamCancel(source, error).
-    //                 2. Otherwise, return a promise resolved with undefined.
-    //              5. Shutdown with an action consisting of getting a promise to wait for all of the actions in actions, and with error.
-    //           2. If signal is aborted, perform abortAlgorithm and return promise.
-    //           3. Add abortAlgorithm to signal.
+    // 14. If signal is not undefined,
+    if (!signal.is_undefined()) {
+        auto abort_signal = as_if<DOM::AbortSignal>(signal.as_object());
+
+        // 1. Let abortAlgorithm be the following steps:
+        Function<void()> abort_algorithm = [promise, &source, &dest, &realm, prevent_abort, prevent_cancel, &abort_signal] {
+            // 1. Let error be signal’s abort reason.
+            auto error = abort_signal->reason();
+            auto const& error_as_error = static_cast<WebIDL::DOMException const&>(error.as_object());
+            dbgln("error: {}", error_as_error.name());
+            dbgln("message: {}", error_as_error.message());
+
+            // 2. Let actions be an empty ordered set.
+            Vector<Function<GC::Ref<WebIDL::Promise>()>> actions;
+
+            // 3. If preventAbort is false, append the following action to actions:
+            if (!prevent_abort) {
+                actions.append([&dest, &realm, error] {
+                    // 1. If dest.[[state]] is "writable", return ! WritableStreamAbort(dest, error).
+                    if (dest.state() == WritableStream::State::Writable) {
+                        return writable_stream_abort(dest, error);
+                    }
+
+                    // 2. Otherwise, return a promise resolved with undefined.
+                    return WebIDL::create_resolved_promise(realm, JS::js_undefined());
+                });
+            }
+
+            // 4. If preventCancel is false, append the following action to actions:
+            if (!prevent_cancel) {
+                actions.append([&source, &realm, error] {
+                    // 1. If source.[[state]] is "readable", return ! ReadableStreamCancel(source, error).
+                    if (source.state() == ReadableStream::State::Readable) {
+                        return readable_stream_cancel(source, error);
+                    }
+
+                    //  2. Otherwise, return a promise resolved with undefined.
+                    return WebIDL::create_resolved_promise(realm, JS::js_undefined());
+                });
+            }
+
+            // 5. Shutdown with an action consisting of getting a promise to wait for all of the actions in actions, and with error.
+            GC::RootVector<GC::Ref<WebIDL::Promise>> promises(realm.heap());
+
+            for (auto const& action : actions) {
+                auto result = action();
+
+                promises.append(result);
+            }
+
+            WebIDL::wait_for_all(
+                realm, promises,
+                [&realm, promise](auto const&) {
+                    HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
+                    WebIDL::resolve_promise(realm, promise);
+                },
+                [&realm, promise](auto error) {
+                    HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
+                    WebIDL::reject_promise(realm, promise, error);
+                });
+        };
+
+        // 2. If signal is aborted, perform abortAlgorithm and return promise.
+        if (abort_signal->aborted()) {
+            abort_algorithm();
+            return promise;
+        }
+
+        // 3. Add abortAlgorithm to signal.
+        abort_signal->add_abort_algorithm(move(abort_algorithm));
+    }
 
     // 15. In parallel but not really; see #905, using reader and writer, read all chunks from source and write them to
     //     dest. Due to the locking provided by the reader and writer, the exact manner in which this happens is not

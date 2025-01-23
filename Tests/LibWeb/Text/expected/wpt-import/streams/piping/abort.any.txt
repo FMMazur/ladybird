@@ -1,0 +1,12 @@
+Harness status: OK
+
+Found 6 tests
+
+5 Pass
+1 Fail
+Pass	a signal argument 'null' should cause pipeTo() to reject
+Pass	a signal argument 'AbortSignal' should cause pipeTo() to reject
+Pass	a signal argument 'true' should cause pipeTo() to reject
+Pass	a signal argument '-1' should cause pipeTo() to reject
+Pass	a signal argument '[object AbortSignal]' should cause pipeTo() to reject
+Fail	an aborted signal should cause the writable stream to reject with an AbortError
